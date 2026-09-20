@@ -49,11 +49,17 @@ def chart_style(fig,height=400):
     return fig
 
 @st.cache_resource(show_spinner=False)
-def client(key, password, env): return KIS(key,password,env)
+def cached_client(key, password, env, class_identity, _client_type):
+    # The numeric identity is hashed; the matching class object is not.
+    # Module reloads create a new class and must not reuse an older client.
+    return _client_type(key, password, env)
+
+def client(key, password, env):
+    return cached_client(key, password, env, id(KIS), KIS)
 
 # Cache only non-account data; account responses stay inside the active session.
 @st.cache_data(ttl=60,show_spinner=False)
-def public_data(key,password,env,kind,code):
+def public_data(key,password,env,kind,code,adapter_identity):
     obj = client(key,password,env)
     result = getattr(obj,kind)(code)
     return result,now()
@@ -105,7 +111,7 @@ def fetch(kind, symbol):
         if kind=='history': return demo_history(symbol), now()
         if kind=='flow': return demo_flow(symbol), now()
         if kind=='index': return {'price':2748.32 if symbol=='0001' else 862.14,'change':.84 if symbol=='0001' else -.32}, now()
-    return public_data(key,password,env,kind,symbol)
+    return public_data(key,password,env,kind,symbol,(id(KIS), id(APIError)))
 
 # Share each result within one render, including failed requests.
 # This prevents a second quote lookup producing contradictory cards and tables.
