@@ -1,4 +1,4 @@
-"""SEOUL / MARKET — Streamlit domestic stock dashboard."""
+"""이종완의 주식 분석 대시보드 — Streamlit domestic stock dashboard."""
 import hmac, html, re, time
 from datetime import timedelta
 import numpy as np
@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from data import KIS, APIError, NAMES, now, number, krx_market, demo_history, demo_quote, demo_flow
 
-st.set_page_config(page_title='SEOUL / MARKET',page_icon='◈',layout='wide')
+st.set_page_config(page_title='이종완의 주식 분석 대시보드',page_icon='◈',layout='wide')
 st.markdown('''<style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap');
 html,body,[class*="css"]{font-family:'Noto Sans KR',sans-serif;}
@@ -65,7 +65,7 @@ key, password = str(secret('KIS_APP_KEY')), str(secret('KIS_APP_SECRET'))
 env = str(secret('KIS_ENV','prod'))
 if env not in ('prod','vps'): st.error('KIS_ENV는 prod 또는 vps여야 합니다.'); st.stop()
 with st.sidebar:
-    st.markdown('## ◈ SEOUL / MARKET')
+    st.markdown('## ◈ 이종완의 주식 분석 대시보드')
     st.caption('나의 국내주식 리서치 데스크')
     st.divider()
     mode = st.radio('데이터 모드',['데모','API 연결'],index=0)
@@ -95,7 +95,7 @@ if not demo and (not key or not password):
 if not demo and env=='vps': st.info('모의투자 환경입니다. 일부 시세·수급 API는 지원되지 않을 수 있습니다.')
 
 st.markdown('<div class="eyebrow">YOUR PERSONAL INVESTING WORKSPACE</div>',unsafe_allow_html=True)
-st.title('시장을 읽고, 나의 투자를 살피다.')
+st.title('이종완의 주식 분석 대시보드')
 st.markdown('<div class="sub">시장 흐름부터 종목의 움직임, 투자자 수급과 자산 현황까지 한곳에서 확인하세요.</div>',unsafe_allow_html=True)
 if demo: st.info('DEMO · 모든 가격·수급·잔고는 화면 확인을 위한 가상 데이터이며 실제 시장 정보가 아닙니다.')
 
@@ -107,10 +107,20 @@ def fetch(kind, symbol):
         if kind=='index': return {'price':2748.32 if symbol=='0001' else 862.14,'change':.84 if symbol=='0001' else -.32}, now()
     return public_data(key,password,env,kind,symbol)
 
+# Share each result within one render, including failed requests.
+# This prevents a second quote lookup producing contradictory cards and tables.
+render_results = {}
 def safe(kind,symbol):
-    try: return fetch(kind,symbol)
+    lookup = (kind, symbol)
+    if lookup in render_results:
+        return render_results[lookup]
+    try:
+        result = fetch(kind,symbol)
+        render_results[lookup] = result
+        return result
     except (APIError,KeyError,ValueError,TypeError) as e:
         st.warning(str(e) if isinstance(e,APIError) else '응답 형식이 예상과 다릅니다. 해당 API 명세를 확인하세요.')
+        render_results[lookup] = (None, None)
         return None,None
 
 cols = st.columns(4)
@@ -272,4 +282,5 @@ DASHBOARD_PASSWORD = "충분히-긴-나만의-잔고조회-비밀번호"''',lang
     st.write('KRX: 유가증권·코스닥 일별매매정보의 이용 승인을 확인하세요. 계좌 정보 없이도 시세 화면을 사용할 수 있습니다.')
     st.write('개인 계좌를 연결하는 배포 앱은 비공개로 운영하세요. 이 잔고 비밀번호는 간단한 추가 잠금이며 사용자별 로그인 기능은 아닙니다.')
     st.markdown('[한국투자증권 API 문서](https://apiportal.koreainvestment.com/) · [KRX OpenAPI](https://openapi.krx.co.kr/)')
-st.caption('SEOUL / MARKET  ·  가격·수급·계좌 정보를 함께 보는 개인 리서치 데스크  ·  시간대: Asia/Seoul')
+st.caption('이종완의 주식 분석 대시보드  ·  가격·수급·계좌 정보를 함께 보는 개인 리서치 데스크  ·  시간대: Asia/Seoul')
+
