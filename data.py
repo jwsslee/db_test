@@ -1,6 +1,6 @@
 """Read-only KRX/KIS adapters. Never logs secrets or raw HTTP errors."""
 from __future__ import annotations
-import json, time, threading
+import json, time, threading, re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from urllib.request import Request, urlopen
@@ -10,7 +10,26 @@ import pandas as pd
 
 KST = ZoneInfo('Asia/Seoul')
 class APIError(Exception):
-    pass
+    def __init__(self, message, status=None, code=''):
+        super().__init__(message)
+        self.status, self.code = status, code
+
+
+def service_error(status=None, body=None):
+    # Only a strict service-code format is exposed. Never echo msg1 or bodies.
+    raw = str(body.get('msg_cd', '')) if isinstance(body, dict) else ''
+    code = raw if re.fullmatch(r'[A-Z]{3,8}[0-9]{3,8}', raw) else ''
+    label = (f'HTTP {status}' if status else '한국투자증권 오류') + (f' · {code}' if code else '')
+    if code == 'EGW00201' or status == 429:
+        hint = '호출 한도 초과입니다. 같은 키를 사용하는 다른 앱을 잠시 중지하고 다시 조회하세요.'
+    elif status in (401, 403):
+        hint = '인증 또는 접근 권한 오류입니다. 키와 실전/모의 환경을 확인하세요.'
+    elif status and status >= 500:
+        hint = '서버가 요청을 처리하지 못했습니다. 잠시 후 다시 조회하고, 반복되면 이 오류 코드를 확인하세요.'
+    else:
+        hint = '요청을 처리하지 못했습니다. 해당 오류 코드의 권한·환경·입력 조건을 확인하세요.'
+    return APIError(f'{label}: {hint}', status, code)
+
 
 def now():
     return datetime.now(KST)
@@ -28,7 +47,11 @@ def http(url, headers=None, payload=None):
         with urlopen(req, timeout=15) as res:
             return json.load(res), dict(res.headers)
     except HTTPError as e:
-        raise APIError(f'HTTP {e.code}: 서비스 권한·인증·호출 한도를 확인하세요.') from None
+        try:
+            body = json.loads(e.read(16384).decode('utf-8'))
+        except (ValueError, OSError):
+            body = None
+        raise service_error(e.code, body) from None
     except (URLError, TimeoutError, ValueError, OSError):
         raise APIError('응답을 받지 못했습니다. 네트워크 또는 서비스 상태를 확인하세요.') from None
 
@@ -54,17 +77,23 @@ class KIS:
                     raise APIError('접근 토큰 발급 실패: App Key, App Secret, 실전/모의 환경을 확인하세요.')
                 self.token = obj['access_token']
                 self.expires = time.time() + max(1, int(obj.get('expires_in', 86400)) - 120)
-            time.sleep(max(0, 0.65 - (time.monotonic() - self.last_call)))
-            self.last_call = time.monotonic()
-            obj, headers = http(self.base + endpoint + '?' + urlencode(params),
-                {'authorization':f'Bearer {self.token}', 'appkey':self.key, 'appsecret':self.secret,
-                 'tr_id':tr, 'custtype':'P', 'tr_cont':continuation, 'Content-Type':'application/json'})
-            if str(obj.get('rt_cd')) != '0':
-                code = str(obj.get('msg_cd', 'UNKNOWN'))
-                # Only a sanitized code is exposed, never the raw service message.
-                code = ''.join(c for c in code if c.isalnum())[:30]
-                raise APIError(f'한국투자증권 오류 {code}: 권한·계좌·환경 및 API 지원 여부를 확인하세요.')
-            return obj, {k.lower():v for k,v in headers.items()}
+            # GET requests only: bounded retries for throttling and transient failures.
+            for attempt in range(3):
+                time.sleep(max(0, 1.1 - (time.monotonic() - self.last_call)))
+                self.last_call = time.monotonic()
+                try:
+                    obj, headers = http(self.base + endpoint + '?' + urlencode(params),
+                        {'authorization':f'Bearer {self.token}', 'appkey':self.key, 'appsecret':self.secret,
+                         'tr_id':tr, 'custtype':'P', 'tr_cont':continuation, 'Content-Type':'application/json'})
+                    if str(obj.get('rt_cd')) != '0':
+                        raise service_error(body=obj)
+                    return obj, {k.lower():v for k,v in headers.items()}
+                except APIError as exc:
+                    retryable = (exc.code == 'EGW00201' or exc.status == 429 or
+                                 (not exc.code and exc.status in (500, 502, 503, 504)))
+                    if not retryable or attempt == 2:
+                        raise APIError(f'{tr} · {exc}', exc.status, exc.code) from None
+                    time.sleep(2 ** (attempt + 1))
 
     def quote(self, code):
         o, _ = self.get('/uapi/domestic-stock/v1/quotations/inquire-price', 'FHKST01010100',
@@ -167,3 +196,4 @@ def demo_flow(code):
     d['외국인'] = rng.integers(-700000,1400000,len(d)); d['기관'] = rng.integers(-500000,800000,len(d))
     d['개인'] = -d['외국인']-d['기관']
     return d
+
